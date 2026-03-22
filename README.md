@@ -56,12 +56,10 @@ jupyter notebook notebooks/exploration.ipynb
 ## Methodology
 
 ### Study Areas
-- **California**: Focused on the Central Valley region (near Fresno), characterized by high crop diversity (almonds, grapes, etc.).
-- **Arkansas**: Focused on the Grand Prairie region, known for extensive rice and soybean cultivation.
+- **California**: Focused on the Central Valley region (near Fresno), characterized by high crop diversity (almonds, grapes, etc.) (378 time steps, 4 bands, ~11k x 9k pixels).
+- **Arkansas**: Focused on the Grand Prairie region, known for extensive rice and soybean cultivation (254 time steps, 4 bands, ~11k x 9k pixels).
+
+The NDVI time-series show clear vegetation growth cycles, and the CDL distribution captures a diverse range of crop types, providing a solid foundation for the classification model.
 
 ### Data Processing
 The project utilizes **Sentinel-2 Level-2A** data (Atmospherically corrected). We compute the **NDVI (Normalized Difference Vegetation Index)** using Red (B04) and NIR (B08) bands to monitor crop growth cycles. Label data is sourced from the **USDA NASS Cropland Data Layer (CDL)** at 30m resolution, resampled to match Sentinel-2's 10m grid.
-
-## Authors
-- **Team Members**: [User Name]
-- **Framework**: MCTNet (Multi-stage CNN-Transformer Network) context.
