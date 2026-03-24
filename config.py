@@ -19,4 +19,4 @@ CLOUD_PERCENT = 20
 # STAC API Settings
 STAC_API_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 S2_COLLECTION = "sentinel-2-l2a"
-CDL_COLLECTION = "usda-cdl"
+CDL_COLLECTION = "usda-cdl"

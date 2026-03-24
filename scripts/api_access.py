@@ -4,10 +4,13 @@ import stackstac
 import xarray as xr
 import os
 import sys
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 # Ensure config can be imported from parent dir
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
+
 
 def get_stac_data(area_name, collection, bbox, datetime):
     """Fetch STAC items and return a signed collection."""
