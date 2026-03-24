@@ -13,7 +13,7 @@ STUDY_AREAS = {
     }
 }
 
-DATE_RANGE = "2020-01-01/2020-12-31"
+DATE_RANGE = "2021-01-01/2021-12-31"
 CLOUD_PERCENT = 20
 
 STAC_API_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"

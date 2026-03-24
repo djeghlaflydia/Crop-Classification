@@ -3,8 +3,9 @@ import sys
 import numpy as np
 import xarray as xr
 import stackstac
+import pystac_client
+import planetary_computer
 from sklearn.model_selection import StratifiedShuffleSplit
-import time
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
@@ -13,7 +14,10 @@ from scripts.api_access import get_stac_data
 # ----------------------------------------------------------------------
 # Fonction pour créer les composites décadaires (médiane sur 10 jours)
 # ----------------------------------------------------------------------
-def get_10day_composites(area_name, bbox, bands, year=2020, epsg=32611):
+def get_10day_composites(area_name, bbox, bands, year=2021, epsg=32611):
+    """
+    Retourne un DataArray (time=36, band, y, x) avec composites médians sur 10 jours.
+    """
     start_date = f"{year}-01-01"
     end_date = f"{year}-12-31"
     datetime_range = f"{start_date}/{end_date}"
@@ -45,112 +49,89 @@ def get_10day_composites(area_name, bbox, bands, year=2020, epsg=32611):
     return da
 
 # ----------------------------------------------------------------------
-# Échantillonnage de points aléatoires à partir du CDL (avec gestion d'erreurs)
+# Échantillonnage vectorisé (rapide)
 # ----------------------------------------------------------------------
-def sample_points_vectorized(da_s2, da_cdl, num_points=10000, seed=42):
-    """Version vectorisée plus rapide mais peut échouer sur certaines tuiles."""
+def sample_points(da_s2, da_cdl, num_points=2000, seed=42):
+    """
+    Extrait des points aléatoires de manière vectorisée.
+    """
     np.random.seed(seed)
     cdl_data = da_cdl.sel(band='cropland').values
     valid_y, valid_x = np.where(cdl_data > 0)
     if len(valid_y) == 0:
         raise ValueError("Aucun pixel CDL valide dans la zone")
 
-    n = min(num_points, len(valid_y))
-    idx = np.random.choice(len(valid_y), n, replace=False)
-    y_idx, x_idx = valid_y[idx], valid_x[idx]
-    labels = cdl_data[y_idx, x_idx]
-
-    x_coords = da_cdl.coords['x'].values
-    y_coords = da_cdl.coords['y'].values
-
-    # Récupérer les coordonnées géographiques
-    x_vals = x_coords[x_idx]
-    y_vals = y_coords[y_idx]
-
-    # Extraction vectorisée (peut échouer si les données ne sont pas alignées)
-    X = da_s2.sel(x=xr.DataArray(x_vals, dims='point'),
-                  y=xr.DataArray(y_vals, dims='point'),
-                  method='nearest').values
-    # X shape: (point, time, band)
-    X = np.transpose(X, (1, 0, 2))   # remettre en (point, time, band)
-    return X, labels
-
-def sample_points_loop(da_s2, da_cdl, num_points=10000, seed=42, max_attempts=None):
-    """Version en boucle, plus lente mais plus robuste."""
-    np.random.seed(seed)
-    cdl_data = da_cdl.sel(band='cropland').values
-    valid_y, valid_x = np.where(cdl_data > 0)
-    if len(valid_y) == 0:
-        raise ValueError("Aucun pixel CDL valide dans la zone")
-
-    # On tire 2 fois plus de candidats pour compenser les échecs
-    n_to_try = min(int(num_points * 2), len(valid_y))
+    n_to_try = min(int(num_points * 1.2), len(valid_y))
     idx = np.random.choice(len(valid_y), n_to_try, replace=False)
     y_idx = valid_y[idx]
     x_idx = valid_x[idx]
-    labels = cdl_data[y_idx, x_idx]
 
     x_coords = da_cdl.coords['x'].values
     y_coords = da_cdl.coords['y'].values
+    xs = x_coords[x_idx]
+    ys = y_coords[y_idx]
 
-    X_list = []
-    y_list = []
-    for i in range(len(y_idx)):
-        x_val = x_coords[x_idx[i]]
-        y_val = y_coords[y_idx[i]]
-        try:
-            ts = da_s2.sel(x=x_val, y=y_val, method='nearest').values
-            X_list.append(ts)
-            y_list.append(labels[i])
-        except Exception as e:
-            # Silently skip
-            continue
-        if len(X_list) >= num_points:
-            break
-        if max_attempts and i >= max_attempts:
-            break
-
-    if len(X_list) == 0:
-        raise ValueError("Aucun point valide extrait après plusieurs tentatives.")
-    if len(X_list) < num_points:
-        print(f"Attention : seulement {len(X_list)} points valides sur {num_points} demandés.")
-
-    X = np.stack(X_list, axis=0)
-    y = np.array(y_list)
-    return X, y
-
-def sample_points(da_s2, da_cdl, num_points=10000, seed=42):
-    """Tente d'abord la version vectorisée, puis bascule en boucle en cas d'erreur."""
+    # Extraction vectorisée (une seule requête)
     try:
-        X, y = sample_points_vectorized(da_s2, da_cdl, num_points, seed)
-        print("Extraction vectorisée réussie.")
-        return X, y
+        ts = da_s2.sel(
+            x=xr.DataArray(xs, dims='point'),
+            y=xr.DataArray(ys, dims='point'),
+            method='nearest'
+        ).values  # shape (n_points, 36, n_bands)
     except Exception as e:
         print(f"Erreur extraction vectorisée : {e}. Fallback à la boucle.")
-        return sample_points_loop(da_s2, da_cdl, num_points, seed)
+        # Fallback en boucle si ça échoue
+        ts_list = []
+        for xi, yi in zip(xs, ys):
+            try:
+                ts_list.append(da_s2.sel(x=xi, y=yi, method='nearest').values)
+            except:
+                continue
+        if not ts_list:
+            raise ValueError("Aucun point valide")
+        ts = np.stack(ts_list, axis=0)
+        # Labels correspondants
+        labels = cdl_data[y_idx[:len(ts_list)], x_idx[:len(ts_list)]]
+    else:
+        labels = cdl_data[y_idx, x_idx]
+
+    # Éliminer les points contenant des NaN
+    nan_mask = np.isnan(ts).any(axis=(1,2))
+    ts = ts[~nan_mask]
+    labels = labels[~nan_mask]
+
+    if len(ts) == 0:
+        raise ValueError("Aucun point valide après filtrage des NaN")
+    if len(ts) < num_points:
+        print(f"Attention : seulement {len(ts)} points valides sur {num_points} demandés.")
+    elif len(ts) > num_points:
+        ts = ts[:num_points]
+        labels = labels[:num_points]
+
+    return ts, labels
 
 # ----------------------------------------------------------------------
 # Fonction principale
 # ----------------------------------------------------------------------
 def main():
     for area_name, epsg in [('California', 32611), ('Arkansas', 32615)]:
-        print(f"\n=== Traitement de {area_name} ===")
+        print(f"\n=== Traitement de {area_name} (2021) ===")
         bbox = config.STUDY_AREAS[area_name]['bbox']
         bands = ['B02','B03','B04','B05','B06','B07','B08','B8A','B11','B12']
 
-        # 1. Données Sentinel-2
+        # 1. Données Sentinel-2 (année 2021)
         try:
-            s2_cube = get_10day_composites(area_name, bbox, bands, year=2020, epsg=epsg)
+            s2_cube = get_10day_composites(area_name, bbox, bands, year=2021, epsg=epsg)
             print(f"{area_name} S2 cube shape: {s2_cube.shape}")
         except Exception as e:
             print(f"Erreur Sentinel-2 pour {area_name} : {e}")
             continue
 
-        # 2. Données CDL
-        cdl_items = get_stac_data(area_name, config.CDL_COLLECTION, bbox, "2020-01-01/2020-12-31")
+        # 2. Données CDL (année 2021)
+        cdl_items = get_stac_data(area_name, config.CDL_COLLECTION, bbox, "2021-01-01/2021-12-31")
         if not cdl_items:
             print(f"Aucune donnée CDL pour {area_name} avec {config.CDL_COLLECTION}")
-            cdl_items = get_stac_data(area_name, "usda-cdl", bbox, "2020-01-01/2020-12-31")
+            cdl_items = get_stac_data(area_name, "usda-cdl", bbox, "2021-01-01/2021-12-31")
             if not cdl_items:
                 print(f"Échec total pour {area_name}. Passer à la suivante.")
                 continue
@@ -158,8 +139,8 @@ def main():
         cdl_cube = stackstac.stack(cdl_items, assets=['cropland'], bounds_latlon=bbox, epsg=epsg, resolution=30)
         cdl_cube = cdl_cube.isel(time=0)  # une seule date
 
-        # 3. Échantillonnage avec 1000 points (rapide pour test)
-        X, y = sample_points(s2_cube, cdl_cube, num_points=1000)   # <--- MODIFIÉ : 1000 points
+        # 3. Échantillonnage
+        X, y = sample_points(s2_cube, cdl_cube, num_points=2000)
         print(f"Échantillons extraits : X shape {X.shape}, y shape {y.shape}")
 
         # Remplacer les NaN par 0 (comme dans l'article)
