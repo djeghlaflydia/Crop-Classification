@@ -5,25 +5,18 @@ import xarray as xr
 import numpy as np
 import os
 import sys
-
-<<<<<<< HEAD
-=======
-
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
 
 # Ensure config can be imported from parent dir
->>>>>>> 9fb4bec6ab67138a40da01fd868a03afc7b8277a
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
 
 
-<<<<<<< HEAD
 # ----------------------------------------------------------------------
 # STAC ACCESS (FIX SIGNATURE + WARNING)
 # ----------------------------------------------------------------------
-=======
->>>>>>> 9fb4bec6ab67138a40da01fd868a03afc7b8277a
 def get_stac_data(area_name, collection, bbox, datetime):
 
     catalog = pystac_client.Client.open(config.STAC_API_URL)
@@ -90,7 +83,9 @@ def create_composites(stack, year=2021):
         if mask.sum() > 0:
             comp = stack.isel(time=mask).median(dim="time", skipna=True)
         else:
-            comp = stack.isel(time=0)
+            # Create an empty composite with same shape if no images in interval
+            ref = stack.isel(time=0)
+            comp = xr.full_like(ref, np.nan)
 
         comp = comp.assign_coords(time=i)
         composites.append(comp)
