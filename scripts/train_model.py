@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+from scripts.utils import get_unique_path
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
@@ -74,6 +76,7 @@ disp = ConfusionMatrixDisplay(confusion_matrix=cm)
 disp.plot(cmap="Blues", xticks_rotation=45)
 plt.title("Confusion Matrix")
 plt.tight_layout()
+plt.savefig(get_unique_path("confusion_matrix.png"))
 plt.show()
 
 
@@ -92,6 +95,7 @@ plt.xlabel("Bands")
 plt.ylabel("Importance")
 plt.xticks(rotation=30)
 plt.tight_layout()
+plt.savefig(get_unique_path("feature_importance.png"))
 plt.show()
 
 
@@ -108,6 +112,7 @@ plt.title("Distribution des classes (Train)")
 plt.xlabel("Classe")
 plt.ylabel("Nombre de pixels")
 plt.tight_layout()
+plt.savefig(get_unique_path("class_distribution_train.png"))
 plt.show()
 
 
@@ -125,6 +130,7 @@ plt.plot(Y_pred[:n], label="Pred", marker='x')
 plt.title("Comparaison Y_true vs Y_pred")
 plt.legend()
 plt.tight_layout()
+plt.savefig(get_unique_path("sample_predictions.png"))
 plt.show()
 
 

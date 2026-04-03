@@ -63,3 +63,37 @@ The NDVI time-series show clear vegetation growth cycles, and the CDL distributi
 
 ### Data Processing
 The project utilizes **Sentinel-2 Level-2A** data (Atmospherically corrected). We compute the **NDVI (Normalized Difference Vegetation Index)** using Red (B04) and NIR (B08) bands to monitor crop growth cycles. Label data is sourced from the **USDA NASS Cropland Data Layer (CDL)** at 30m resolution, resampled to match Sentinel-2's 10m grid.
+
+
+Part 1 requires:
+1. Literature Review:
+   - Analysis of the paper methodology:
+     • Data preparation
+     • Temporal sampling strategy
+     • Model architecture
+     • Training procedure
+     • Evaluation metrics
+
+2. Dataset Acquisition:
+   - Sentinel-2 data
+   - Cropland Data Layer (CDL) data
+   - Study areas: California and Arkansas
+
+3. Data Exploration:
+   - Visualization of time-series vegetation indices
+   - Class distribution analysis
+   - Temporal patterns of different crops
+   - Detection of missing values and noise
+
+4. Data Preprocessing:
+   - Cloud filtering
+   - Time-series interpolation
+   - Normalization
+   - Vegetation indices extraction
+   - Alignment with crop labels
+
+5. Model Implementation:
+   - Reimplementation of the CNN-Transformer architecture from the paper
+   - Model training
+   - Evaluation of results
+   - Comparison with the results reported in the paper

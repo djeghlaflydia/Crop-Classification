@@ -6,24 +6,19 @@ import numpy as np
 import os
 import sys
 
-<<<<<<< HEAD
-=======
 
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# Ensure config can be imported from parent dir
->>>>>>> 9fb4bec6ab67138a40da01fd868a03afc7b8277a
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
 
 
-<<<<<<< HEAD
+
 # ----------------------------------------------------------------------
 # STAC ACCESS (FIX SIGNATURE + WARNING)
 # ----------------------------------------------------------------------
-=======
->>>>>>> 9fb4bec6ab67138a40da01fd868a03afc7b8277a
+
 def get_stac_data(area_name, collection, bbox, datetime):
 
     catalog = pystac_client.Client.open(config.STAC_API_URL)
@@ -55,7 +50,7 @@ def mask_clouds(stack):
     cloud_classes = [3, 8, 9, 10, 11]
 
     # ✅ garder xarray (IMPORTANT)
-    mask = ~xr.apply_ufunc(np.isin, scl, cloud_classes)
+    mask = ~scl.isin(cloud_classes)
 
     return stack.where(mask)
 
@@ -95,7 +90,7 @@ def create_composites(stack, year=2021):
         comp = comp.assign_coords(time=i)
         composites.append(comp)
 
-    cube = xr.concat(composites, dim="time")
+    cube = xr.concat(composites, dim="time", coords="minimal", compat="override")
 
     return cube
 

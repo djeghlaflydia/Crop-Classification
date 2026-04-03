@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -5,84 +6,85 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, cohen_kappa_score, f1_score
 import sys
-sys.path.append('..')
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from scripts.model import MCTNet
 
-def load_data(area_name):
+def load_and_prepare_data(area_name):
+    print(f"Loading files for {area_name}...")
     X_train = np.load(f'X_train_{area_name}.npy')
     y_train = np.load(f'y_train_{area_name}.npy')
     mask_train = np.load(f'mask_train_{area_name}.npy')
-    # idem pour val et test
-    return (X_train, y_train, mask_train), (X_val, y_val, mask_val), (X_test, y_test, mask_test)
+    X_val = np.load(f'X_val_{area_name}.npy')
+    y_val = np.load(f'y_val_{area_name}.npy')
+    mask_val = np.load(f'mask_val_{area_name}.npy')
+    X_test = np.load(f'X_test_{area_name}.npy')
+    y_test = np.load(f'y_test_{area_name}.npy')
+    mask_test = np.load(f'mask_test_{area_name}.npy')
 
-def main():
-    area_name = 'Arkansas'  # ou 'California'
-    (X_train, y_train, mask_train), (X_val, y_val, mask_val), (X_test, y_test, mask_test) = load_data(area_name)
+    return (
+        TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(mask_train, dtype=torch.float32).unsqueeze(-1), torch.tensor(y_train, dtype=torch.long)),
+        TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(mask_val, dtype=torch.float32).unsqueeze(-1), torch.tensor(y_val, dtype=torch.long)),
+        TensorDataset(torch.tensor(X_test, dtype=torch.float32), torch.tensor(mask_test, dtype=torch.float32).unsqueeze(-1), torch.tensor(y_test, dtype=torch.long))
+    )
 
-    # Conversion en tenseurs
-    X_train_t = torch.tensor(X_train, dtype=torch.float32)
-    mask_train_t = torch.tensor(mask_train, dtype=torch.float32).unsqueeze(-1)
-    y_train_t = torch.tensor(y_train, dtype=torch.long)
-    # idem val, test
+def train_area(area_name):
+    print(f"\n=== Training on {area_name} ===")
+    try:
+        train_ds, val_ds, test_ds = load_and_prepare_data(area_name)
+    except Exception as e:
+        print(f"Error loading {area_name}: {e}")
+        return
 
-    # Paramètres
-    num_classes = len(np.unique(y_train))
+    num_classes = int(torch.cat([train_ds.tensors[2], val_ds.tensors[2], test_ds.tensors[2]]).max().item() + 1)
+    input_dim = train_ds.tensors[0].shape[-1]
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = MCTNet(input_dim=10, d_model=64, n_stages=3, nhead=5, kernel_size=3, num_classes=num_classes).to(device)
+    
+    model = MCTNet(input_dim=input_dim, d_model=64, n_stages=2, nhead=4, num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
-    batch_size = 32
-    train_loader = DataLoader(TensorDataset(X_train_t, mask_train_t, y_train_t), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(X_val_t, mask_val_t, y_val_t), batch_size=batch_size)
+    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=32)
 
     best_val_acc = 0.0
-    for epoch in range(200):
-        # Entraînement
+    for epoch in range(30): # Reduced epochs for rapid Part 1 verification
         model.train()
-        train_loss = 0.0
         for x, m, y in train_loader:
             x, m, y = x.to(device), m.to(device), y.to(device)
-            optimizer.zero_grad()
-            out = model(x, m)
-            loss = criterion(out, y)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+            optimizer.zero_grad(); loss = criterion(model(x, m), y); loss.backward(); optimizer.step()
 
-        # Validation
         model.eval()
-        correct = 0
-        total = 0
+        correct, total = 0, 0
         with torch.no_grad():
             for x, m, y in val_loader:
                 x, m, y = x.to(device), m.to(device), y.to(device)
-                out = model(x, m)
-                _, pred = torch.max(out, 1)
-                total += y.size(0)
-                correct += (pred == y).sum().item()
-        val_acc = correct / total
+                pred = model(x, m).argmax(dim=1)
+                total += y.size(0); correct += (pred == y).sum().item()
+        
+        val_acc = correct / total if total > 0 else 0
         scheduler.step(val_acc)
-        print(f'Epoch {epoch+1}: loss={train_loss/len(train_loader):.4f}, val_acc={val_acc:.4f}')
+        if (epoch+1) % 5 == 0: print(f"Epoch {epoch+1}/30 - Val Acc: {val_acc:.4f}")
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save(model.state_dict(), f'best_model_{area_name}.pth')
 
     # Test
     model.load_state_dict(torch.load(f'best_model_{area_name}.pth'))
-    test_loader = DataLoader(TensorDataset(X_test_t, mask_test_t, y_test_t), batch_size=batch_size)
+    test_loader = DataLoader(test_ds, batch_size=32)
     preds, trues = [], []
+    model.eval()
     with torch.no_grad():
         for x, m, y in test_loader:
-            x, m = x.to(device), m.to(device)
-            out = model(x, m)
-            preds.extend(out.argmax(dim=1).cpu().numpy())
-            trues.extend(y.numpy())
-    oa = accuracy_score(trues, preds)
-    kappa = cohen_kappa_score(trues, preds)
-    f1 = f1_score(trues, preds, average='macro')
-    print(f'Test: OA={oa:.4f}, Kappa={kappa:.4f}, F1={f1:.4f}')
+            out = model(x.to(device), m.to(device))
+            preds.extend(out.argmax(dim=1).cpu().numpy()); trues.extend(y.numpy())
+    
+    print(f"Results for {area_name}: OA={accuracy_score(trues, preds):.4f} | Kappa={cohen_kappa_score(trues, preds):.4f}")
+
+def main():
+    for area in ['Arkansas', 'California']:
+        train_area(area)
 
 if __name__ == '__main__':
     main()
