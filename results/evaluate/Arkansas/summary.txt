@@ -1,0 +1,11 @@
+Evaluation Results - Arkansas
+==================================================
+
+Test samples: 100
+Number of classes: 26
+
+Overall Metrics:
+  Overall Accuracy (OA): 0.1500 (15.00%)
+  Cohen's Kappa: 0.1180
+  F1-Score (Macro): 0.1622
+  F1-Score (Weighted): 0.1718

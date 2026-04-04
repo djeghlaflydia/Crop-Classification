@@ -1,0 +1,11 @@
+Evaluation Results - California
+==================================================
+
+Test samples: 317
+Number of classes: 43
+
+Overall Metrics:
+  Overall Accuracy (OA): 0.1356 (13.56%)
+  Cohen's Kappa: 0.1135
+  F1-Score (Macro): 0.1101
+  F1-Score (Weighted): 0.1567

@@ -1,0 +1,13 @@
+Comparison with Paper Results
+==================================================
+
+California:
+  Our OA: 0.1356 (13.56%)
+  Paper OA: 0.8760 (87.60%)
+  Difference: -0.7404 (-74.04%)
+
+Arkansas:
+  Our OA: 0.1500 (15.00%)
+  Paper OA: 0.8920 (89.20%)
+  Difference: -0.7420 (-74.20%)
+

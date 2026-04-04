@@ -42,23 +42,23 @@ CDL_COLLECTION = "USDA/NASS/CDL"
 S2_BANDS = ["B2", "B3", "B4", "B8"]  # Blue, Green, Red, NIR
 S2_BAND_NAMES = ["blue", "green", "red", "nir"]
 
-# Model configuration (from the paper)
+# Model configuration (AMÉLIORÉ)
 MODEL_CONFIG = {
-    "d_model": 64,
-    "n_stages": 3,
-    "nhead": 4,
-    "kernel_size": 3,
-    "dropout": 0.1
+    "d_model": 128,      # Augmenté: 64 → 128
+    "n_stages": 4,       # Augmenté: 3 → 4
+    "nhead": 8,          # Augmenté: 4 → 8
+    "kernel_size": 5,    # Augmenté: 3 → 5
+    "dropout": 0.2
 }
 
-# Training configuration
+# Training configuration (AUGMENTÉ)
 BATCH_SIZE = 32
-EPOCHS = 50
+EPOCHS = 200           # Changé: 50 → 200
 LEARNING_RATE = 0.001
-PATIENCE = 10  # Early stopping
-NUM_WORKERS = 4
+PATIENCE = 20          # Changé: 10 → 20
+NUM_WORKERS = 0
 
 # Data configuration
-MAX_SAMPLES_PER_AREA = 500  # Number of sample points per area
-TEMPORAL_RESOLUTION = 36  # 36 x 10-day composites = 360 days
-RESOLUTION_METERS = 20  # Spatial resolution for sampling
+MAX_SAMPLES_PER_AREA = 500
+TEMPORAL_RESOLUTION = 36
+RESOLUTION_METERS = 20

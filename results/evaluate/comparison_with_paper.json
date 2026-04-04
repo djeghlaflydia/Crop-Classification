@@ -1,0 +1,20 @@
+[
+  {
+    "area": "California",
+    "our_OA": 0.13564668769716087,
+    "paper_OA": 0.876,
+    "diff_OA": -0.7403533123028392,
+    "our_Kappa": 0.11346772135748906,
+    "paper_Kappa": 0.858,
+    "diff_Kappa": -0.7445322786425109
+  },
+  {
+    "area": "Arkansas",
+    "our_OA": 0.15,
+    "paper_OA": 0.892,
+    "diff_OA": -0.742,
+    "our_Kappa": 0.11798277472242391,
+    "paper_Kappa": 0.875,
+    "diff_Kappa": -0.7570172252775761
+  }
+]
