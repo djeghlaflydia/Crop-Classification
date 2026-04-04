@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import config
@@ -19,7 +20,7 @@ from scripts.model import MCTNet
 
 def load_data(area_name):
     """Load preprocessed data"""
-    print(f"\nLoading data for {area_name}...")
+    print(f"\n📂 Loading data for {area_name}...")
     
     X_train = np.load(f'{config.DATA_DIR}/X_train_{area_name}.npy')
     X_val = np.load(f'{config.DATA_DIR}/X_val_{area_name}.npy')
@@ -37,10 +38,10 @@ def load_data(area_name):
     with open(f'{config.DATA_DIR}/class_info_{area_name}.json', 'r') as f:
         class_info = json.load(f)
     
-    print(f"  X_train: {X_train.shape}, y_train: {y_train.shape}")
-    print(f"  X_val: {X_val.shape}, y_val: {y_val.shape}")
-    print(f"  X_test: {X_test.shape}, y_test: {y_test.shape}")
-    print(f"  Classes: {class_info['n_classes']}")
+    print(f"    X_train: {X_train.shape}, y_train: {y_train.shape}")
+    print(f"    X_val:   {X_val.shape}, y_val:   {y_val.shape}")
+    print(f"    X_test:  {X_test.shape}, y_test:  {y_test.shape}")
+    print(f"    Classes: {class_info['n_classes']}")
     
     return (X_train, y_train, mask_train), (X_val, y_val, mask_val), (X_test, y_test, mask_test), class_info
 
@@ -58,8 +59,8 @@ def create_dataloaders(X_train, y_train, mask_train, X_val, y_val, mask_val, bat
         torch.tensor(y_val, dtype=torch.long)
     )
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=config.NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=config.NUM_WORKERS)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)  # num_workers=0 pour éviter les problèmes Windows
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     
     return train_loader, val_loader
 
@@ -70,7 +71,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
     all_preds = []
     all_labels = []
     
-    for x, m, y in loader:
+    for x, m, y in tqdm(loader, desc="      Training", leave=False):
         x, m, y = x.to(device), m.to(device), y.to(device)
         
         optimizer.zero_grad()
@@ -95,7 +96,7 @@ def validate(model, loader, criterion, device):
     all_labels = []
     
     with torch.no_grad():
-        for x, m, y in loader:
+        for x, m, y in tqdm(loader, desc="      Validation", leave=False):
             x, m, y = x.to(device), m.to(device), y.to(device)
             output = model(x, m)
             loss = criterion(output, y)
@@ -125,7 +126,7 @@ def plot_training_curves(history, area_name):
     axes[1].plot(history['train_acc'], label='Train Acc', linewidth=2)
     axes[1].plot(history['val_acc'], label='Val Acc', linewidth=2)
     axes[1].set_xlabel('Epoch', fontsize=12)
-    axes[1].set_ylabel('Accuracy (%)', fontsize=12)
+    axes[1].set_ylabel('Accuracy', fontsize=12)
     axes[1].set_title(f'Accuracy Curves - {area_name}', fontsize=14, fontweight='bold')
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
@@ -138,7 +139,7 @@ def plot_training_curves(history, area_name):
 def train_area(area_name):
     """Train model for one area"""
     print(f"\n{'='*60}")
-    print(f"Training MCTNet on {area_name}")
+    print(f"🚀 Training MCTNet on {area_name}")
     print(f"{'='*60}")
     
     # Load data
@@ -153,7 +154,7 @@ def train_area(area_name):
     
     # Model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"\n  Device: {device}")
+    print(f"\n  💻 Device: {device}")
     
     input_dim = X_train.shape[-1]
     num_classes = class_info['n_classes']
@@ -168,7 +169,8 @@ def train_area(area_name):
         dropout=config.MODEL_CONFIG['dropout']
     ).to(device)
     
-    print(f"  Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"  📊 Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"  📚 Number of classes: {num_classes}")
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -180,9 +182,15 @@ def train_area(area_name):
     patience_counter = 0
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
     
-    print("\n  Starting training...")
+    print("\n  🏋️ Starting training...")
+    print(f"  Epochs: {config.EPOCHS} | Batch size: {config.BATCH_SIZE} | Patience: {config.PATIENCE}")
+    print("-" * 60)
+    
     for epoch in range(config.EPOCHS):
+        # Train
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
+        
+        # Validate
         val_loss, val_acc = validate(model, val_loader, criterion, device)
         
         history['train_loss'].append(train_loss)
@@ -192,11 +200,10 @@ def train_area(area_name):
         
         scheduler.step(val_loss)
         
-        # Print progress
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"    Epoch {epoch+1:3d}/{config.EPOCHS} | "
-                  f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-                  f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        # Print progress (every epoch now for better tracking)
+        print(f"    Epoch {epoch+1:3d}/{config.EPOCHS} | "
+              f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
+              f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
         
         # Early stopping and checkpoint
         if val_acc > best_val_acc:
@@ -209,10 +216,11 @@ def train_area(area_name):
                 'val_acc': val_acc,
                 'class_info': class_info
             }, f'results/{area_name}/best_model.pth')
+            print(f"      ✅ New best model! (Acc: {val_acc:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= config.PATIENCE:
-                print(f"    Early stopping at epoch {epoch+1}")
+                print(f"      ⏹️ Early stopping at epoch {epoch+1} (no improvement for {config.PATIENCE} epochs)")
                 break
     
     # Save training history
@@ -222,13 +230,15 @@ def train_area(area_name):
     plot_training_curves(history, area_name)
     
     print(f"\n  ✅ Best validation accuracy: {best_val_acc:.4f} ({best_val_acc*100:.2f}%)")
+    print(f"  📁 Results saved to: results/{area_name}/")
     
     return model, history, best_val_acc
 
 def main():
     """Main training function"""
     print("\n" + "="*70)
-    print("MODEL TRAINING - Part 1")
+    print("🎯 MODEL TRAINING - Part 1")
+    print("   Architecture: MCTNet (CNN-Transformer)")
     print("="*70)
     
     results = {}
@@ -238,18 +248,22 @@ def main():
             model, history, best_acc = train_area(area_name)
             results[area_name] = {'best_val_acc': best_acc, 'history': history}
         except Exception as e:
-            print(f"Error training {area_name}: {e}")
+            print(f"\n❌ Error training {area_name}: {e}")
             import traceback
             traceback.print_exc()
     
     # Summary
     print("\n" + "="*70)
-    print("TRAINING SUMMARY")
+    print("📊 TRAINING SUMMARY")
     print("="*70)
     for area, res in results.items():
-        print(f"  {area}: Best Val Acc = {res['best_val_acc']:.4f} ({res['best_val_acc']*100:.2f}%)")
+        print(f"  📍 {area}: Best Val Acc = {res['best_val_acc']:.4f} ({res['best_val_acc']*100:.2f}%)")
     
     print("\n✅ Training complete! Check 'results/{area_name}/' for outputs.")
+    print("   - best_model.pth : Best model weights")
+    print("   - training_curves.png : Loss and accuracy curves")
+    print("   - training_history.json : Detailed training history")
+    print("="*70)
 
 if __name__ == "__main__":
     # Create results directories
