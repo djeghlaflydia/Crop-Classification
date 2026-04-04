@@ -48,22 +48,35 @@ Crop-Classification/
 │   ├── y_train_California.npy
 │   ├── class_info_California.json
 │   └── ... (same for Arkansas)
-├── results/                  # All outputs
-│   ├── explore/              # Exploration PNG files
-│   │   ├── California/
-│   │   │   ├── class_distribution_California.png
-│   │   │   ├── temporal_patterns_California.png
-│   │   │   ├── data_quality_California.png
-│   │   │   └── band_ndvi_California.png
-│   │   └── Arkansas/
-│   │       └── ...
-│   └── train/                # Training outputs
-│       ├── California/
-│       │   ├── best_model.pth
-│       │   ├── training_history.json
-│       │   └── training_curves.png
-│       └── Arkansas/
-│           └── ...
+├── results/
+│  ├── explore/
+│  │   ├── California/
+│  │   │   ├── class_distribution_California.png
+│  │   │   ├── temporal_patterns_California.png
+│  │   │   ├── data_quality_California.png
+│  │   │   └── band_ndvi_California.png
+│  │   └── Arkansas/
+│  │       └── ...
+│  ├── train/
+│  │   ├── California/
+│  │   │   ├── best_model.pth
+│  │   │   ├── training_history.json
+│  │   │   ├── training_curves.png
+│  │   │   ├── X_test.npy
+│  │   │   ├── y_test.npy
+│  │   │   └── mask_test.npy
+│  │   └── Arkansas/
+│  │       └── ...
+│  └── evaluate/                    ← MANQUE DANS TON README
+│  │   ├── California/
+│  │   │   ├── confusion_matrix.png
+│  │   │   ├── per_class_metrics.png
+│  │   │   ├── evaluation_results.json
+│  │   │   └── summary.txt
+│  │   ├── Arkansas/
+│  │   │   └── ...
+│  │   ├── comparison_with_paper.json
+│  │   └── comparison_summary.txt
 └── scripts/                  # Core Python modules
     ├── api_access.py         # GEE connection & data retrieval
     ├── explore_data.py       # Data exploration & visualization
@@ -96,31 +109,189 @@ Crop-Classification/
    earthengine set_project your-project-id
    ```
 
-## Usage
+## 📈 Pipeline Execution
 
-### 1. Data Exploration
-To generate the NDVI time-series and class distribution plots for both study areas:
+### Step 1: Data Exploration
+
 ```bash
 python scripts/explore_data.py
 ```
 Outputs will be saved in the `results/plots/` directory.
 
-### 2. Interactive Analysis
-Open the Jupyter notebook for a detailed step-by-step walkthrough of the data acquisition and phenology analysis:
+| File                            | Description                         |
+|---------------------------------|-------------------------------------|
+| `class_distribution_{area}.png` | Distribution of crop types from CDL |
+| `temporal_patterns_{area}.png`  | NDVI time-series for top 5 crop classes |
+| `data_quality_{area}.png`       | Cloud cover analysis & monthly availability |
+| `band_ndvi_{area}.png`          | Sentinel-2 band reflectance & NDVI statistics |
+
+**Output statistics**:
+
+| Area       | Classes | Samples | Timesteps | Bands |
+|------------|---------|---------|-----------|-------|
+| California | 43      | 2,111   | 47        | 7     |
+| Arkansas   | 26      | 664     | 18        | 7     |
+
+---
+
+### Step 2: Data Preprocessing
 ```bash
-jupyter notebook notebooks/exploration.ipynb
+python scripts/preprocess.py
+```
+## What It Does
+- Samples points from CDL (proportional to class distribution)
+- Extracts Sentinel-2 time-series for each point
+- Calculates vegetation indices:
+  - NDVI
+  - EVI
+  - NDWI
+- Interpolates missing values (linear interpolation)
+- Normalizes data (mean / std standardization)
+- Splits data into:
+  - Train (70%)
+  - Validation (15%)
+  - Test (15%)
+- Saves processed data as `.npy` files in `data/`
+
+---
+
+### Step 3: Model Training
+```bash
+python scripts/train.py
+```
+### 🧠 Model Architecture (MCTNet)
+
+- **Input**: Time-series (47 / 18 timesteps × 7 bands)
+- **Positional Encoding**: ALPE (Adaptive Learned Positional Encoding)
+- **Feature Extraction**: 4 stages of CNN-Transformer fusion
+- **Classification**: MLP with dropout
+
+---
+
+### ⚙️ Training Configuration
+
+| Parameter             | Value            |
+|-----------------------|------------------|
+| Epochs                | 200 |
+| Batch size            | 32  |
+| Learning rate         | 0.001 (Cosine annealing) |
+| Optimizer             | AdamW with weight decay |
+| Loss                  | Cross-entropy with class weighting |
+| Early stopping        | 20 epochs patience |
+| d_model               | 128 |
+| n_stages              | 4   |
+| nhead                 | 8   |
+| kernel_size           | 5   |
+| dropout               | 0.2 |
+
+| Area | Classes | Train Samples | Val Samples | Best Val Acc | Best Balanced Acc |
+|------|---------|---------------|-------------|--------------|-------------------|
+| California | 43 | 1,477 | 317 | 14.83% | 11.37% |
+| Arkansas | 26 | 464 | 100 | 15.00% | 11.70% |
+
+### 📁 Outputs (`results/train/{area}/`)
+
+- `best_model.pth` → Best model weights  
+- `training_history.json` → Loss and accuracy per epoch  
+- `training_curves.png` → 4-panel training visualization  
+
+---
+
+### Step 4: Model Evaluation
+```bash
+python scripts/evaluate.py
+```
+### Metrics Computed
+- Overall Accuracy (OA)
+- Cohen’s Kappa
+- F1-Score (Macro & Weighted)
+- Per-class Precision, Recall, F1
+- Confusion Matrix (counts & normalized)
+
+### Outputs (`results/evaluate/{area}/`)
+
+- `confusion_matrix.png` → Confusion matrix (counts & normalized)  
+- `per_class_metrics.png` → Per-class precision, recall, F1  
+- `evaluation_results.json` → Detailed evaluation metrics  
+- `summary.txt` → Text summary of results 
+
+---
+
+
+
+
+
+## 📄 Comparison with Paper
+
+### 📊 Reported Results
+
+| Area | Paper OA | Our OA |
+|------|---------|--------|
+| Arkansas | ~89.2% | ~17.0% |
+| California | ~87.6% | ~17.4% |
+
+---
+
+### 🔍 Performance Gap Analysis
+Our lower performance can be attributed to:
+
+- Limited samples (≈30 points per class vs. full pixel coverage)
+- CPU-only training (no GPU acceleration)
+- Small study areas (5km × 5km vs. larger regions)
+- Conservative hyperparameters (to prevent overfitting)
+
+---
+
+##  Methodology Details
+
+###  1. Literature Review
+
+Key contributions from the paper:
+
+- **Data Preparation**: Cloud filtering using QA60 band, 10-day composites  
+- **Temporal Sampling**: 36 timesteps (10-day intervals) over the growing season  
+- **Model Architecture**: CNN (local features) + Transformer (global dependencies) + ECA attention  
+- **Training Strategy**: Cross-entropy loss, Adam optimizer, early stopping  
+- **Evaluation Metrics**: OA, Kappa, F1-score, confusion matrix  
+
+###  2. Data Acquisition via GEE
+
+```bash
+# Sentinel-2 access
+s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+    .filterBounds(geometry)
+    .filterDate(start_date, end_date)
+    .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 20))
+
+# CDL access
+cdl = ee.Image(f'USDA/NASS/CDL/{year}')
 ```
 
-## Methodology
+###  3. Data Preprocessing Pipeline
+```bash
+Raw S2 → Cloud masking → NDVI/EVI/NDWI → Interpolation → Normalization → Train/Val/Test split
+Raw CDL → Class extraction → Stratified sampling → Alignment with S2 pixels
+```
+###  4. Model Architecture (MCTNet)
+```bash
+Input (B, T, 7)
+    ↓
+Linear Projection (→ d_model=128)
+    ↓
+ALPE (Positional Encoding + Mask)
+    ↓
+Stage 1: CTFusion (CNN + Transformer + ECA)
+Stage 2: CTFusion
+Stage 3: CTFusion
+Stage 4: CTFusion
+    ↓
+Global Average Pooling
+    ↓
+Classifier (Linear → ReLU → Dropout → Linear)
+    ↓
+Output (B, num_classes)
+```
 
-### Study Areas
-- **California**: Focused on the Central Valley region (near Fresno), characterized by high crop diversity (almonds, grapes, etc.) (378 time steps, 4 bands, ~11k x 9k pixels).
-- **Arkansas**: Focused on the Grand Prairie region, known for extensive rice and soybean cultivation (254 time steps, 4 bands, ~11k x 9k pixels).
-
-The NDVI time-series show clear vegetation growth cycles, and the CDL distribution captures a diverse range of crop types, providing a solid foundation for the classification model.
-
-### Data Processing
-The project utilizes **Sentinel-2 Level-2A** data (Atmospherically corrected). We compute the **NDVI (Normalized Difference Vegetation Index)** using Red (B04) and NIR (B08) bands to monitor crop growth cycles. Label data is sourced from the **USDA NASS Cropland Data Layer (CDL)** at 30m resolution, resampled to match Sentinel-2's 10m grid.
 
 
 Part 1 requires:
@@ -155,11 +326,3 @@ Part 1 requires:
    - Model training
    - Evaluation of results
    - Comparison with the results reported in the paper
-
-
-
-
-Où vont vraiment les données :
-Donnée	Source réelle	Comment on y accède
-Sentinel-2	Agence Spatiale Européenne (ESA)	Via Google Earth Engine
-CDL (Cropland Data Layer)	USDA (Département Agriculture US)	Via Google Earth Engine
