@@ -1,9 +1,27 @@
-pystac-client
-planetary-computer
-stackstac
-xarray
-matplotlib
-pandas
-numpy
-rioxarray
-python-dotenv
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+xarray>=2022.3.0
+dask>=2022.2.0
+netCDF4>=1.5.8
+
+# Google Earth Engine (REPLACES STAC/Planetary Computer)
+earthengine-api>=0.1.380
+geemap>=0.28.0  # For visualization and downloading
+
+# Deep Learning
+torch>=1.10.0
+torchvision>=0.11.0
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Machine Learning & Processing
+scikit-learn>=1.0.0
+tqdm>=4.62.0
+
+# Utilities
+python-dotenv>=0.19.0
+pillow>=8.3.0

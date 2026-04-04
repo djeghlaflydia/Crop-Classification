@@ -1,178 +1,107 @@
-import pystac_client
-import planetary_computer
-import stackstac
-import xarray as xr
+"""
+api_access.py - Google Earth Engine data access module
+"""
+
+import ee
 import numpy as np
 import os
-import sys
+from typing import List, Tuple, Optional
 
-
-import ssl
-ssl._create_default_https_context = ssl._create_unverified_context
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import config
-
-
-
-# ----------------------------------------------------------------------
-# STAC ACCESS (FIX SIGNATURE + WARNING)
-# ----------------------------------------------------------------------
-
-def get_stac_data(area_name, collection, bbox, datetime):
-
-    catalog = pystac_client.Client.open(config.STAC_API_URL)
-
-    search = catalog.search(
-        collections=[collection],
-        bbox=bbox,
-        datetime=datetime,
-    )
-
-    # ✅ FIX WARNING
-    items = list(search.items())
-
-    # ✅ FIX 403 (sign URLs)
-    items = [planetary_computer.sign(item) for item in items]
-
-    print(f"[{area_name}] Found {len(items)} items for {collection}")
-
-    return items
-
-
-# ----------------------------------------------------------------------
-# CLOUD MASK (FIXED 100%)
-# ----------------------------------------------------------------------
-def mask_clouds(stack):
-
-    scl = stack.sel(band="SCL")
-
-    cloud_classes = [3, 8, 9, 10, 11]
-
-    # ✅ garder xarray (IMPORTANT)
-    mask = ~scl.isin(cloud_classes)
-
-    return stack.where(mask)
-
-
-# ----------------------------------------------------------------------
-# REDUCE DATA (ANTI-CRASH 🔥)
-# ----------------------------------------------------------------------
-def filter_items(items, max_items=30):
-
-    items = sorted(items, key=lambda x: x.properties["eo:cloud_cover"])
-
-    return items[:max_items]
-
-
-# ----------------------------------------------------------------------
-# COMPOSITES (10-DAYS)
-# ----------------------------------------------------------------------
-def create_composites(stack, year=2021):
-
-    times = stack.time.values
-    start = np.datetime64(f"{year}-01-01")
-
-    composites = []
-
-    for i in range(36):
-
-        t0 = start + np.timedelta64(i * 10, 'D')
-        t1 = start + np.timedelta64((i + 1) * 10, 'D')
-
-        mask = (times >= t0) & (times < t1)
-
-        if mask.sum() > 0:
-            comp = stack.isel(time=mask).median(dim="time", skipna=True)
+def init_gee(project: str = None):
+    """Initialize Google Earth Engine API"""
+    try:
+        if project:
+            ee.Initialize(project=project)
         else:
-            comp = stack.isel(time=0)
+            ee.Initialize()
+        print("✅ Google Earth Engine initialized successfully")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to initialize GEE: {e}")
+        print("Please run: earthengine authenticate")
+        return False
 
-        comp = comp.assign_coords(time=i)
-        composites.append(comp)
+def mask_s2_clouds(image: ee.Image) -> ee.Image:
+    """
+    Mask clouds and shadows in Sentinel-2 imagery using QA band.
+    CORRECTED VERSION - no Reducer.any() issue
+    """
+    # QA60 band: bit10 = cloud, bit11 = cirrus
+    qa = image.select('QA60')
+    
+    # Cloud mask bits
+    cloud_bit_mask = 1 << 10
+    cirrus_bit_mask = 1 << 11
+    
+    # Clear pixels: both cloud and cirrus bits are 0
+    mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
+           qa.bitwiseAnd(cirrus_bit_mask).eq(0))
+    
+    # Apply mask and scale reflectance to [0,1]
+    return image.updateMask(mask).divide(10000)
 
-    cube = xr.concat(composites, dim="time", coords="minimal", compat="override")
+def get_s2_collection(bbox: List[float], start_date: str, end_date: str, 
+                      max_cloud: int = 20) -> ee.ImageCollection:
+    """Get Sentinel-2 image collection for a bounding box"""
+    geometry = ee.Geometry.BBox(*bbox)
+    
+    collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                  .filterBounds(geometry)
+                  .filterDate(start_date, end_date)
+                  .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', max_cloud))
+                  .map(mask_s2_clouds))
+    
+    return collection
 
-    return cube
+def get_cdl_image(bbox: List[float], year: int) -> ee.Image:
+    """Get Cropland Data Layer image for a given year"""
+    geometry = ee.Geometry.BBox(*bbox)
+    
+    cdl = (ee.Image(f'USDA/NASS/CDL/{year}')
+           .clip(geometry)
+           .select('cropland'))
+    
+    return cdl
 
+def compute_ndvi(image: ee.Image) -> ee.Image:
+    """Compute NDVI (Normalized Difference Vegetation Index)"""
+    nir = image.select('B8')
+    red = image.select('B4')
+    ndvi = nir.subtract(red).divide(nir.add(red)).rename('NDVI')
+    return image.addBands(ndvi)
 
-# ----------------------------------------------------------------------
-# MAIN
-# ----------------------------------------------------------------------
-def main():
+def compute_evi(image: ee.Image) -> ee.Image:
+    """Compute EVI (Enhanced Vegetation Index)"""
+    nir = image.select('B8')
+    red = image.select('B4')
+    blue = image.select('B2')
+    
+    evi = nir.subtract(red).multiply(2.5).divide(
+        nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1)
+    ).rename('EVI')
+    
+    return image.addBands(evi)
 
-    for area_name, settings in config.STUDY_AREAS.items():
+def compute_ndwi(image: ee.Image) -> ee.Image:
+    """Compute NDWI (Normalized Difference Water Index)"""
+    green = image.select('B3')
+    nir = image.select('B8')
+    ndwi = green.subtract(nir).divide(green.add(nir)).rename('NDWI')
+    return image.addBands(ndwi)
 
-        print(f"\n=== Processing {area_name} ===")
+def get_s2_collection_with_indices(bbox: List[float], start_date: str, 
+                                    end_date: str, max_cloud: int = 20) -> ee.ImageCollection:
+    """Get Sentinel-2 collection with vegetation indices"""
+    collection = get_s2_collection(bbox, start_date, end_date, max_cloud)
+    collection = collection.map(compute_ndvi)
+    collection = collection.map(compute_evi)
+    collection = collection.map(compute_ndwi)
+    return collection
 
-        bbox = settings["bbox"]
-        epsg = 32611 if area_name == "California" else 32615
-
-        # ------------------------------------------------------------------
-        # 1. GET DATA
-        # ------------------------------------------------------------------
-        s2_items = get_stac_data(
-            area_name,
-            config.S2_COLLECTION,
-            bbox,
-            config.DATE_RANGE
-        )
-
-        if not s2_items:
-            print("No data")
-            continue
-
-        # ✅ LIMIT DATA (VERY IMPORTANT)
-        s2_items = filter_items(s2_items, max_items=30)
-
-        # ------------------------------------------------------------------
-        # 2. STACK (LOW MEMORY)
-        # ------------------------------------------------------------------
-        s2_stack = stackstac.stack(
-            s2_items,
-            assets=["B04", "B03", "B02", "B08", "SCL"],
-            bounds_latlon=bbox,
-            epsg=epsg,
-            resolution=20,  # 🔥 reduce memory
-            chunksize={"time": 1, "x": 256, "y": 256}
-        ).astype("float32")  # 🔥 reduce RAM
-
-        print(f"S2 shape: {s2_stack.shape}")
-
-        # ------------------------------------------------------------------
-        # 3. CLOUD MASK
-        # ------------------------------------------------------------------
-        s2_stack = mask_clouds(s2_stack)
-
-        # ------------------------------------------------------------------
-        # 4. COMPOSITES
-        # ------------------------------------------------------------------
-        s2_cube = create_composites(s2_stack)
-
-        # enlever SCL
-        s2_cube = s2_cube.sel(band=["B04", "B03", "B02", "B08"])
-
-        print(f"Final cube: {s2_cube.shape}")
-
-        # ------------------------------------------------------------------
-        # 5. NDVI
-        # ------------------------------------------------------------------
-        red = s2_cube.sel(band="B04")
-        nir = s2_cube.sel(band="B08")
-
-        ndvi = (nir - red) / (nir + red)
-
-        print(f"NDVI shape: {ndvi.shape}")
-
-        # ------------------------------------------------------------------
-        # 6. SAFE LOAD
-        # ------------------------------------------------------------------
-        s2_cube = s2_cube.compute()
-        ndvi = ndvi.compute()
-
-        print(f"✅ {area_name} ready")
-
-    print("\n🔥 PIPELINE COMPLET OK (clean + stable + no crash)")
-
-
-if __name__ == "__main__":
-    main()
+def create_10day_composite(collection: ee.ImageCollection, 
+                           start_date: str, 
+                           end_date: str) -> ee.Image:
+    """Create a 10-day median composite from an image collection"""
+    filtered = collection.filterDate(start_date, end_date)
+    composite = filtered.median()
+    return composite
