@@ -97,3 +97,11 @@ Part 1 requires:
    - Model training
    - Evaluation of results
    - Comparison with the results reported in the paper
+
+
+
+
+Où vont vraiment les données :
+Donnée	Source réelle	Comment on y accède
+Sentinel-2	Agence Spatiale Européenne (ESA)	Via Google Earth Engine
+CDL (Cropland Data Layer)	USDA (Département Agriculture US)	Via Google Earth Engine
