@@ -1,5 +1,5 @@
 """
-preprocess.py - Data preprocessing pipeline
+preprocess.py - Data preprocessing (VERSION ACCÉLÉRÉE)
 """
 
 import os
@@ -8,211 +8,213 @@ import ee
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import config
-from scripts.api_access import init_gee, get_s2_collection_with_indices, get_cdl_image
+from scripts.api_access import init_gee, get_s2_collection, get_cdl_image, compute_ndvi, compute_evi, compute_ndwi
 
-def extract_pixel_time_series(s2_collection, point, scale=20):
-    """Extract time series for a single pixel"""
-    time_series = []
+def sample_points_by_class_fast(area_name, bbox, points_per_class=30):
+    """
+    Échantillonnage rapide par classe
+    """
+    print(f"\n  Processing {area_name}...")
     
-    # Get all images
-    image_list = s2_collection.toList(s2_collection.size())
-    n_images = s2_collection.size().getInfo()
-    
-    for i in range(n_images):
-        image = ee.Image(image_list.get(i))
-        
-        # Extract bands
-        values = []
-        for band in config.S2_BANDS + ['NDVI', 'EVI', 'NDWI']:
-            value = image.select(band).sample(
-                region=point,
-                scale=scale,
-                geometries=False
-            ).first()
-            
-            try:
-                val = value.getInfo()[band]
-                values.append(val)
-            except:
-                values.append(np.nan)
-        
-        time_series.append(values)
-    
-    return np.array(time_series)
-
-def sample_points_from_cdl(area_name, bbox, num_points=500):
-    """Sample random points from CDL data"""
     geometry = ee.Geometry.BBox(*bbox)
-    
-    # Get CDL
     cdl = get_cdl_image(bbox, config.YEAR)
     
-    # Get valid pixels (non-zero)
-    valid_mask = cdl.neq(0)
+    # Obtenir toutes les classes
+    hist = cdl.reduceRegion(
+        reducer=ee.Reducer.frequencyHistogram(),
+        geometry=geometry,
+        scale=30,
+        maxPixels=1e6
+    ).getInfo()
     
-    # Stratified sampling by class
-    sample_points = valid_mask.stratifiedSample(
-        numPoints=num_points,
-        classBand='cropland',
-        scale=config.RESOLUTION_METERS,
-        geometries=True,
-        seed=42,
-        dropNulls=True
-    )
+    class_counts = hist.get('cropland', {})
+    available_classes = [int(k) for k in class_counts.keys() if int(k) > 0]
+    print(f"  Classes disponibles: {len(available_classes)}")
     
-    points_list = sample_points.getInfo()['features']
+    all_points = []
+    all_labels = []
     
-    # Extract coordinates and labels
-    points = []
-    labels = []
-    
-    for point in points_list:
-        coords = point['geometry']['coordinates']
-        label = point['properties']['cropland']
-        points.append(ee.Geometry.Point(coords))
-        labels.append(label)
-    
-    return points, labels
-
-def create_timeseries_dataset(area_name, bbox, num_points=500):
-    """Create complete time-series dataset"""
-    print(f"\n  Creating dataset for {area_name}...")
-    
-    # Get S2 collection with indices
-    s2_collection = get_s2_collection_with_indices(
-        bbox, config.START_DATE, config.END_DATE, config.CLOUD_PERCENT
-    )
-    
-    # Sample points from CDL
-    points, labels = sample_points_from_cdl(area_name, bbox, num_points)
-    
-    # Extract time series for each point
-    X = []
-    y = []
-    masks = []
-    
-    print(f"  Extracting time series for {len(points)} points...")
-    
-    for i, (point, label) in enumerate(tqdm(zip(points, labels), total=len(points))):
+    for class_code in tqdm(available_classes, desc="  Échantillonnage classes"):
+        class_mask = cdl.eq(class_code)
+        
+        samples = class_mask.stratifiedSample(
+            numPoints=points_per_class,
+            classBand='cropland',
+            scale=30,
+            geometries=True,
+            seed=42,
+            dropNulls=True
+        )
+        
         try:
-            ts = extract_pixel_time_series(s2_collection, point)
-            
-            # Create mask for valid values
-            mask = (~np.isnan(ts)).all(axis=1).astype(np.float32)
-            mask = np.expand_dims(mask, axis=-1)
-            
-            # Fill NaN with 0
-            ts = np.nan_to_num(ts, 0)
-            
-            X.append(ts)
-            y.append(label)
-            masks.append(mask)
-            
-        except Exception as e:
-            print(f"    Warning: Failed for point {i}: {e}")
+            samples_list = samples.getInfo()['features']
+            for feat in samples_list:
+                coords = feat['geometry']['coordinates']
+                all_points.append(ee.Geometry.Point(coords))
+                all_labels.append(class_code)
+        except:
             continue
     
-    X = np.array(X)
-    y = np.array(y)
-    masks = np.array(masks)
+    print(f"  Total points: {len(all_points)}")
+    print(f"  Classes uniques: {len(np.unique(all_labels))}")
     
-    print(f"  Dataset shape: X={X.shape}, y={y.shape}, mask={masks.shape}")
+    return all_points, all_labels
+
+def extract_time_series_batch(area_name, bbox, points, labels, batch_size=50):
+    """
+    Extraction par lots - BEAUCOUP PLUS RAPIDE
+    """
+    print(f"\n  Extraction des séries temporelles...")
+    
+    # Get S2 collection
+    s2_collection = get_s2_collection(
+        bbox, config.START_DATE, config.END_DATE, config.CLOUD_PERCENT
+    )
+    s2_collection = s2_collection.map(compute_ndvi)
+    s2_collection = s2_collection.map(compute_evi)
+    s2_collection = s2_collection.map(compute_ndwi)
+    
+    n_images = s2_collection.size().getInfo()
+    bands = config.S2_BANDS + ['NDVI', 'EVI', 'NDWI']
+    
+    print(f"  Images: {n_images}, Bands: {len(bands)}")
+    print(f"  Points: {len(points)}, Lots de {batch_size}")
+    
+    all_X = []
+    all_y = []
+    all_masks = []
+    
+    # Traiter par lots
+    n_batches = (len(points) + batch_size - 1) // batch_size
+    
+    for batch_idx in tqdm(range(n_batches), desc="  Lots"):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, len(points))
+        
+        batch_points = points[start_idx:end_idx]
+        batch_labels = labels[start_idx:end_idx]
+        
+        # Créer FeatureCollection pour ce lot
+        features = []
+        for i, (point, label) in enumerate(zip(batch_points, batch_labels)):
+            features.append(ee.Feature(point, {'label': label, 'id': i}))
+        
+        points_fc = ee.FeatureCollection(features)
+        
+        # Créer le stack d'images pour ce lot
+        image_list = s2_collection.toList(n_images)
+        all_bands = []
+        for i in range(n_images):
+            image = ee.Image(image_list.get(i))
+            for band in bands:
+                all_bands.append(image.select(band).rename(f'{band}_{i}'))
+        
+        stack = ee.Image.cat(all_bands)
+        
+        # Échantillonner
+        try:
+            sampled = stack.sampleRegions(
+                collection=points_fc,
+                scale=20,
+                geometries=False
+            ).getInfo()
+            
+            # Reconstruire pour ce lot
+            for feat in sampled['features']:
+                props = feat['properties']
+                label = props.get('label')
+                point_id = props.get('id')
+                
+                if label is None:
+                    continue
+                
+                all_y.append(label)
+                
+                series = []
+                for i in range(n_images):
+                    row = []
+                    for j, band in enumerate(bands):
+                        val = props.get(f'{band}_{i}', np.nan)
+                        row.append(val if val is not None else np.nan)
+                    series.append(row)
+                
+                ts = np.array(series, dtype=np.float32)
+                mask = (~np.isnan(ts)).all(axis=1).astype(np.float32)
+                mask = np.expand_dims(mask, axis=-1)
+                ts = np.nan_to_num(ts, 0)
+                
+                all_X.append(ts)
+                all_masks.append(mask)
+                
+        except Exception as e:
+            print(f"\n    Lot {batch_idx} échoué: {e}")
+            continue
+    
+    X = np.array(all_X)
+    y = np.array(all_y)
+    masks = np.array(all_masks)
+    
+    print(f"\n  ✅ Dataset: X={X.shape}, y={y.shape}")
+    print(f"  Classes uniques: {np.unique(y)}")
     
     return X, y, masks
 
-def normalize_data(X_train, X_val, X_test):
-    """Normalize data using training statistics"""
-    # Reshape to (samples * time, features)
-    n_samples, n_time, n_features = X_train.shape
-    
-    # Compute mean and std across samples and time
-    mean = X_train.mean(axis=(0, 1), keepdims=True)
-    std = X_train.std(axis=(0, 1), keepdims=True)
-    std = np.where(std == 0, 1, std)
-    
-    X_train_norm = (X_train - mean) / std
-    X_val_norm = (X_val - mean) / std
-    X_test_norm = (X_test - mean) / std
-    
-    # Save normalization parameters
-    norm_params = {'mean': mean.squeeze(), 'std': std.squeeze()}
-    
-    return X_train_norm, X_val_norm, X_test_norm, norm_params
-
-def interpolate_time_series(X, method='linear'):
-    """Interpolate missing values in time series"""
-    from scipy import interpolate
-    
-    n_samples, n_time, n_features = X.shape
-    X_interp = X.copy()
-    
-    for i in range(n_samples):
-        for j in range(n_features):
-            ts = X[i, :, j]
-            valid_mask = ~np.isnan(ts)
-            
-            if valid_mask.sum() > 1:
-                x_valid = np.arange(n_time)[valid_mask]
-                y_valid = ts[valid_mask]
-                
-                # Linear interpolation
-                f = interpolate.interp1d(x_valid, y_valid, kind=method, fill_value='extrapolate')
-                X_interp[i, :, j] = f(np.arange(n_time))
-    
-    return X_interp
-
 def main():
-    """Main preprocessing function"""
     print("\n" + "="*70)
-    print("DATA PREPROCESSING - Part 1")
+    print("DATA PREPROCESSING - VERSION ACCÉLÉRÉE")
     print("="*70)
     
-    # Initialize GEE
     if not init_gee(config.GEE_PROJECT):
         print("Failed to initialize GEE")
         return
     
     os.makedirs(config.DATA_DIR, exist_ok=True)
     
-    all_class_info = {}
-    
     for area_name, settings in config.STUDY_AREAS.items():
         print(f"\n{'='*50}")
-        print(f"Processing {area_name}")
+        print(f"📊 {area_name}")
         print(f"{'='*50}")
         
         bbox = settings['bbox']
         
-        # Extract data
-        X, y, mask = create_timeseries_dataset(
-            area_name, bbox, num_points=config.MAX_SAMPLES_PER_AREA
-        )
+        # Échantillonner (30 points par classe)
+        points, labels = sample_points_by_class_fast(area_name, bbox, points_per_class=30)
         
-        # Interpolate missing values
-        print("\n  Interpolating missing values...")
-        X = interpolate_time_series(X, method='linear')
+        if len(points) == 0:
+            print(f"  ❌ Aucun point")
+            continue
         
-        # Split data
+        # Extraire les séries par lots
+        X, y, mask = extract_time_series_batch(area_name, bbox, points, labels, batch_size=50)
+        
+        if len(X) == 0:
+            print(f"  ❌ Aucune donnée")
+            continue
+        
+        # Split
+        print("\n  Division des données...")
         X_train, X_temp, y_train, y_temp, m_train, m_temp = train_test_split(
-            X, y, mask, test_size=0.3, random_state=42, stratify=y
+            X, y, mask, test_size=0.3, random_state=42
         )
         X_val, X_test, y_val, y_test, m_val, m_test = train_test_split(
-            X_temp, y_temp, m_temp, test_size=0.5, random_state=42, stratify=y_temp
+            X_temp, y_temp, m_temp, test_size=0.5, random_state=42
         )
         
-        print(f"\n  Data split:")
         print(f"    Train: {X_train.shape}")
-        print(f"    Val: {X_val.shape}")
-        print(f"    Test: {X_test.shape}")
+        print(f"    Val:   {X_val.shape}")
+        print(f"    Test:  {X_test.shape}")
         
-        # Encode labels
+        # Encodage
+        print("\n  Encodage...")
         le = LabelEncoder()
         y_train_enc = le.fit_transform(y_train)
         y_val_enc = le.transform(y_val)
@@ -220,21 +222,22 @@ def main():
         
         class_info = {
             'classes': le.classes_.tolist(),
-            'n_classes': len(le.classes_),
-            'class_names': [f"Class_{c}" for c in le.classes_]
+            'n_classes': len(le.classes_)
         }
-        all_class_info[area_name] = class_info
+        print(f"    Classes: {class_info['n_classes']}")
         
-        print(f"\n  Classes: {class_info['n_classes']}")
-        print(f"    {class_info['classes']}")
+        # Normalisation
+        print("\n  Normalisation...")
+        mean = X_train.mean(axis=(0, 1), keepdims=True)
+        std = X_train.std(axis=(0, 1), keepdims=True)
+        std = np.where(std == 0, 1, std)
         
-        # Normalize
-        X_train_norm, X_val_norm, X_test_norm, norm_params = normalize_data(
-            X_train, X_val, X_test
-        )
+        X_train_norm = (X_train - mean) / std
+        X_val_norm = (X_val - mean) / std
+        X_test_norm = (X_test - mean) / std
         
-        # Save data
-        print("\n  Saving data...")
+        # Sauvegarde
+        print("\n  Sauvegarde...")
         np.save(f'{config.DATA_DIR}/X_train_{area_name}.npy', X_train_norm)
         np.save(f'{config.DATA_DIR}/X_val_{area_name}.npy', X_val_norm)
         np.save(f'{config.DATA_DIR}/X_test_{area_name}.npy', X_test_norm)
@@ -247,19 +250,18 @@ def main():
         np.save(f'{config.DATA_DIR}/mask_val_{area_name}.npy', m_val)
         np.save(f'{config.DATA_DIR}/mask_test_{area_name}.npy', m_test)
         
-        # Save metadata
         import json
         with open(f'{config.DATA_DIR}/class_info_{area_name}.json', 'w') as f:
             json.dump(class_info, f, indent=2)
         
+        norm_params = {'mean': mean.squeeze().tolist(), 'std': std.squeeze().tolist()}
         with open(f'{config.DATA_DIR}/norm_params_{area_name}.json', 'w') as f:
-            json.dump({k: v.tolist() for k, v in norm_params.items()}, f, indent=2)
+            json.dump(norm_params, f, indent=2)
         
-        print(f"  ✅ Saved data for {area_name}")
+        print(f"\n  ✅ {area_name} terminé !")
     
     print("\n" + "="*70)
-    print("✅ PREPROCESSING COMPLETE!")
-    print(f"Data saved to '{config.DATA_DIR}/'")
+    print("✅ PREPROCESSING COMPLET")
     print("="*70)
 
 if __name__ == "__main__":
