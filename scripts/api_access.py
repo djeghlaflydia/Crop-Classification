@@ -9,6 +9,7 @@ import sys
 
 
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
 
 # Ensure config can be imported from parent dir
@@ -89,7 +90,9 @@ def create_composites(stack, year=2021):
         if mask.sum() > 0:
             comp = stack.isel(time=mask).median(dim="time", skipna=True)
         else:
-            comp = stack.isel(time=0)
+            # Create an empty composite with same shape if no images in interval
+            ref = stack.isel(time=0)
+            comp = xr.full_like(ref, np.nan)
 
         comp = comp.assign_coords(time=i)
         composites.append(comp)
